@@ -1,0 +1,102 @@
+# Keep this fork's default branch current with the upstream project.
+#
+# Fork-only: this file is not part of any upstream change. Fixes made here
+# land as upstream-shaped pull requests; this workflow merges upstream's
+# default branch in through a pull request whose head is the upstream branch
+# itself, merged with a merge commit so upstream stays an ancestor and the
+# next sync is a plain fast-forward of the delta. A conflict leaves the pull
+# request open and fails the run.
+#
+# After a merge, flake consumers are told to relock (repository_dispatch
+# update-flake-input, the event their lock workflows already accept).
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  # Repos (same owner) whose flake pins this fork.
+  FLAKE_CONSUMERS: nix-ai
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          # Upstream may change its own workflow files.
+          permission-workflows: write
+
+      - name: Merge upstream default branch
+        id: merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          upstream=$(gh api "repos/$REPO" --jq '.parent.full_name')
+          upstream_owner=${upstream%%/*}
+          upstream_branch=$(gh api "repos/$upstream" --jq '.default_branch')
+          base=$(gh api "repos/$REPO" --jq '.default_branch')
+          behind=$(gh api "repos/$REPO/compare/$base...$upstream_owner:$upstream_branch" --jq '.ahead_by')
+          echo "upstream $upstream:$upstream_branch is $behind commit(s) ahead of $base"
+          if [ "$behind" -eq 0 ]; then
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr=$(gh pr list -R "$REPO" --base "$base" --state open \
+            --json number,headRepositoryOwner,headRefName \
+            --jq "map(select(.headRepositoryOwner.login == \"$upstream_owner\" and .headRefName == \"$upstream_branch\")) | .[0].number // empty")
+          if [ -z "$pr" ]; then
+            gh pr create -R "$REPO" --base "$base" --head "$upstream_owner:$upstream_branch" \
+              --title "chore: sync upstream $upstream_branch" \
+              --body "Merges $behind upstream commit(s) from $upstream:$upstream_branch. Opened by the Sync upstream workflow."
+            pr=$(gh pr list -R "$REPO" --base "$base" --state open \
+              --json number,headRepositoryOwner,headRefName \
+              --jq "map(select(.headRepositoryOwner.login == \"$upstream_owner\" and .headRefName == \"$upstream_branch\")) | .[0].number")
+          fi
+          gh pr merge -R "$REPO" "$pr" --merge \
+            --subject "chore: sync upstream $upstream_branch" \
+            --body "Merge $upstream:$upstream_branch."
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Generate consumer dispatch token
+        id: dispatch-token
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          repositories: ${{ env.FLAKE_CONSUMERS }}
+          # repository_dispatch requires contents:write on the target.
+          permission-contents: write
+
+      - name: Notify flake consumers
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          SOURCE: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          for consumer in ${FLAKE_CONSUMERS//,/ }; do
+            gh api "repos/$OWNER/$consumer/dispatches" \
+              -f event_type=update-flake-input \
+              -f "client_payload[input]=$SOURCE"
+            echo "dispatched update-flake-input to $OWNER/$consumer"
+          done
