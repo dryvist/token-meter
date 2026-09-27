@@ -10728,6 +10728,63 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(on_pace["state"], "on_pace")
         self.assertIsNone(early)
 
+    def _claude_oauth_from(self, file_expires_at, keychain):
+        # Expiry arguments are seconds relative to the fixed clock.
+        from token_meter.quotas import anthropic as anthropic_quotas
+
+        now = 1_790_000_000.0
+
+        def blob(token, expires_at):
+            return json.dumps({"claudeAiOauth": {
+                "accessToken": token, "expiresAt": int((now + expires_at) * 1000),
+                "scopes": ["user:profile"],
+            }}).encode("utf-8")
+
+        calls = []
+
+        def run(args, **kwargs):
+            calls.append(args)
+            if keychain is None:
+                return mock.Mock(returncode=44, stdout=b"")
+            return mock.Mock(returncode=0, stdout=blob("keychain-token", keychain))
+
+        subprocess_module = mock.Mock(run=run, TimeoutExpired=TimeoutError)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".credentials.json"
+            path.write_bytes(blob("file-token", file_expires_at))
+            try:
+                oauth = anthropic_quotas.oauth_credentials(
+                    str(path), {"loggedIn": True}, subprocess_module,
+                    now_fn=lambda: now,
+                )
+            except anthropic_quotas.QuotaUnavailable as exc:
+                return str(exc), calls
+        return oauth["accessToken"], calls
+
+    def test_claude_oauth_uses_keychain_when_credentials_file_is_stale(self):
+        token, calls = self._claude_oauth_from(
+            file_expires_at=-3600, keychain=3600,
+        )
+
+        self.assertEqual(token, "keychain-token")
+        self.assertEqual(len(calls), 1)
+
+    def test_claude_oauth_prefers_fresh_credentials_file(self):
+        token, calls = self._claude_oauth_from(
+            file_expires_at=3600, keychain=7200,
+        )
+
+        self.assertEqual(token, "file-token")
+        self.assertEqual(calls, [])
+
+    def test_claude_oauth_keeps_refresh_error_when_keychain_is_unavailable(self):
+        message, calls = self._claude_oauth_from(
+            file_expires_at=-3600, keychain=None,
+        )
+
+        self.assertEqual(message, "Claude OAuth credentials need to be refreshed.")
+        self.assertEqual(len(calls), 1)
+
     def test_codex_parser_preserves_main_and_named_spark_windows(self):
         now = 1_000_000.0
         payload = {

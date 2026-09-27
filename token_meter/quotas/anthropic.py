@@ -108,27 +108,42 @@ def oauth_credentials(credentials_path, auth_status_value, subprocess_module,
             data = stream.read(1024 * 1024 + 1)
     except (FileNotFoundError, OSError):
         pass
-    if data is None:
-        status = auth_status_value or {}
-        if (
-            not status.get("loggedIn")
-            or str(status.get("authMethod") or "").lower() == "third_party"
-        ):
-            raise QuotaUnavailable("Claude OAuth credentials are not available.")
+    file_error = None
+    if data is not None:
         try:
-            result = subprocess_module.run(
-                ["/usr/bin/security", "find-generic-password", "-s",
-                 "Claude Code-credentials", "-w"],
-                capture_output=True, timeout=timeout, check=False,
-                creationflags=getattr(subprocess_module, "CREATE_NO_WINDOW", 0),
-            )
-        except (subprocess_module.TimeoutExpired, OSError):
-            raise QuotaUnavailable(
-                "Claude OAuth credentials are not available."
-            ) from None
-        if result.returncode != 0:
-            raise QuotaUnavailable("Claude OAuth credentials are not available.")
-        data = result.stdout
+            return _usable_oauth(data, now_fn)
+        except QuotaUnavailable as exc:
+            # Claude Code can keep rewriting this file for other entries while
+            # the current OAuth token lives in the keychain, so a stale file
+            # token must not hide a fresh keychain token.
+            file_error = exc
+    status = auth_status_value or {}
+    if (
+        not status.get("loggedIn")
+        or str(status.get("authMethod") or "").lower() == "third_party"
+    ):
+        raise file_error or QuotaUnavailable(
+            "Claude OAuth credentials are not available."
+        )
+    try:
+        result = subprocess_module.run(
+            ["/usr/bin/security", "find-generic-password", "-s",
+             "Claude Code-credentials", "-w"],
+            capture_output=True, timeout=timeout, check=False,
+            creationflags=getattr(subprocess_module, "CREATE_NO_WINDOW", 0),
+        )
+    except (subprocess_module.TimeoutExpired, OSError):
+        raise file_error or QuotaUnavailable(
+            "Claude OAuth credentials are not available."
+        ) from None
+    if result.returncode != 0:
+        raise file_error or QuotaUnavailable(
+            "Claude OAuth credentials are not available."
+        )
+    return _usable_oauth(result.stdout, now_fn)
+
+
+def _usable_oauth(data, now_fn):
     if len(data) > 1024 * 1024:
         raise QuotaUnavailable("Claude OAuth credentials are invalid.")
     try:
