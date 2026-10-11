@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/dryvist/token-meter/compare/v1.0.0...v1.0.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* combine Claude discovery cache and OAuth keychain fixes ([#3](https://github.com/dryvist/token-meter/issues/3)) ([5aa8878](https://github.com/dryvist/token-meter/commit/5aa8878310c9a4138b488b3e464fa26c431dd976))
+
 ## 1.0.0 (2026-10-11)
 
 
