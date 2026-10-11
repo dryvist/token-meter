@@ -551,23 +551,22 @@ class ClaudeRuntimeAdapter:
                 })
         return sources
 
-    def _record_message_ids(self, record):
+    def _record_message_ids(self, record, pass_cache):
         paths = tuple(record.get("_trace_paths") or (record.get("path") or "",))
         cache_key = tuple(
             (str(path), *_file_signature(path)) for path in sorted(paths) if path
         )
-        cached = self._message_id_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        rows, _corrupt, _available = self.load_rows(paths)
-        message_ids = frozenset(
-            str(message["id"])
-            for message in self.logical_messages(rows)
-            if message.get("id")
-        )
-        self._message_id_cache[cache_key] = message_ids
-        if len(self._message_id_cache) > ACTIVITY_CACHE_LIMIT:
-            self._message_id_cache.pop(next(iter(self._message_id_cache)))
+        message_ids = pass_cache.get(cache_key)
+        if message_ids is None:
+            message_ids = self._message_id_cache.get(cache_key)
+        if message_ids is None:
+            rows, _corrupt, _available = self.load_rows(paths)
+            message_ids = frozenset(
+                str(message["id"])
+                for message in self.logical_messages(rows)
+                if message.get("id")
+            )
+        pass_cache[cache_key] = message_ids
         return message_ids
 
     def _canonical_records(self, records):
@@ -589,14 +588,21 @@ class ClaudeRuntimeAdapter:
 
         session_owner = {}
         message_owner = {}
+        # Every discovery pass visits every record, so a size-capped cache
+        # evicts entries before they are reused once records outnumber the
+        # cap. Build this pass's cache privately and publish it whole: it holds
+        # exactly the current revisions, and concurrent passes never mutate or
+        # iterate a shared dict.
+        pass_cache = {}
         for index, record in enumerate(records):
             session_id = str(record.get("id") or "")
             if session_id:
                 previous = session_owner.setdefault(session_id, index)
                 union(index, previous)
-            for message_id in self._record_message_ids(record):
+            for message_id in self._record_message_ids(record, pass_cache):
                 previous = message_owner.setdefault(message_id, index)
                 union(index, previous)
+        self._message_id_cache = pass_cache
 
         groups = {}
         order = []

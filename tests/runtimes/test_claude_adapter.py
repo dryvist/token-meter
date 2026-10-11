@@ -161,6 +161,49 @@ class ClaudeRuntimeAdapterTests(unittest.TestCase):
             {str(self.trace), str(duplicate)},
         )
 
+    def test_unchanged_traces_are_not_reparsed_beyond_activity_cache_limit(self):
+        from token_meter.runtimes import claude as claude_runtime
+
+        extra = claude_runtime.ACTIVITY_CACHE_LIMIT + 1
+        for index in range(extra):
+            trace = self.trace.parent / "session-extra-{}.jsonl".format(index)
+            trace.write_text(json.dumps({
+                "type": "assistant", "timestamp": "2026-08-11T00:00:01Z",
+                "message": {"id": "msg-extra-{}".format(index),
+                            "model": "claude-test", "usage": {"output_tokens": 1}},
+            }) + "\n")
+        context = DiscoveryContext(home=str(self.root))
+        first = self.adapter.discover_legacy(context)
+
+        with mock.patch.object(
+            self.adapter, "load_rows",
+            side_effect=AssertionError("unchanged traces must come from cache"),
+        ):
+            second = self.adapter.discover_legacy(context)
+
+        self.assertEqual(len(first), extra + 1)
+        self.assertEqual(
+            [source["path"] for source in first],
+            [source["path"] for source in second],
+        )
+
+    def test_message_id_cache_drops_revisions_absent_from_latest_pass(self):
+        context = DiscoveryContext(home=str(self.root))
+        self.adapter.discover_legacy(context)
+        published = self.adapter._message_id_cache
+        before = dict(published)
+
+        self._write(self.rows[:2])
+        os.utime(self.trace, (5, 5))
+        self.adapter.discover_legacy(context)
+        after = set(self.adapter._message_id_cache)
+
+        self.assertEqual(len(after), len(before))
+        self.assertFalse(set(before) & after)
+        # Concurrent discovery may still hold the earlier cache; a later pass
+        # must replace it rather than mutate it in place.
+        self.assertEqual(published, before)
+
     def test_duplicate_canonical_source_is_stable_when_globs_reverse(self):
         duplicate = self._add_duplicate_local_agent_trace()
         original_glob = self.adapter._glob
