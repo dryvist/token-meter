@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/dryvist/token-meter/compare/v1.0.1...v1.0.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* **ci:** run the release caller on label and close events ([6f017bf](https://github.com/dryvist/token-meter/commit/6f017bfc4f7f9407143d059fdb8a5d92f86deb3f))
+
 ## [1.0.1](https://github.com/dryvist/token-meter/compare/v1.0.0...v1.0.1) (2026-10-11)
 
 
