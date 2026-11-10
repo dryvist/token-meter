@@ -1,6 +1,8 @@
 import unittest
+import contextlib
 import datetime
 import http.client
+import io
 import json
 import os
 import plistlib
@@ -10968,6 +10970,75 @@ class ProviderQuotaTests(unittest.TestCase):
         self.assertEqual(result["attempted_at"], 1_000_100)
         self.assertEqual(result["error"], "Provider quota refresh failed.")
         self.assertNotIn("secret", result["error"])
+
+    def test_quota_cli_refreshes_synchronously_and_prints_rows(self):
+        good = meter.quota_provider("codex", "Codex", "ok", "test", windows=[
+            meter.quota_window("codex", "codex-weekly", "weekly", "Weekly", 30,
+                               window_seconds=1000, reset_at=1_000_500, now=1_000_000),
+        ])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = meter.quota_cli(
+                ["--json"], now=1_000_000, loaders={"codex": lambda now: good},
+            )
+
+        self.assertEqual(status, 0)
+        rows = json.loads(out.getvalue())["provider_quotas"]
+        self.assertEqual([row["id"] for row in rows], ["codex"])
+        self.assertEqual(rows[0]["status"], "ok")
+        self.assertEqual(rows[0]["windows"][0]["used_percent"], 30.0)
+        self.assertEqual(rows[0]["windows"][0]["pace"]["state"], "reserve")
+
+    def test_quota_cli_reports_loading_for_a_loader_past_the_deadline(self):
+        release = threading.Event()
+
+        def hang(now):
+            release.wait(5)
+            raise meter.QuotaUnavailable("late")
+
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                status = meter.quota_cli(
+                    ["--json"], now=1_000_000, loaders={"codex": hang}, timeout=0.05,
+                )
+        finally:
+            release.set()
+
+        self.assertEqual(status, 0)
+        row = json.loads(out.getvalue())["provider_quotas"][0]
+        self.assertEqual(row["status"], "loading")
+        self.assertEqual(row["windows"], [])
+
+    def test_quota_cli_sanitizes_loader_errors(self):
+        def fail(now):
+            raise RuntimeError("secret bearer token")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            meter.quota_cli(["--json"], now=1_000_000, loaders={"claude": fail})
+
+        row = json.loads(out.getvalue())["provider_quotas"][0]
+        self.assertEqual(row["status"], "error")
+        self.assertNotIn("secret", out.getvalue())
+
+    def test_quota_cli_rejects_unknown_arguments(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = meter.quota_cli(["--yaml"], loaders={})
+
+        self.assertEqual(status, 2)
+        self.assertIn("usage: meter.py quota --json", err.getvalue())
+
+    def test_main_dispatches_quota_without_starting_the_server(self):
+        with mock.patch.object(meter, "quota_cli", return_value=0) as cli, \
+                mock.patch.object(meter, "serve_local") as serve, \
+                self.assertRaises(SystemExit) as exited:
+            meter.main(["quota", "--json"])
+
+        self.assertEqual(exited.exception.code, 0)
+        cli.assert_called_once_with(["--json"])
+        serve.assert_not_called()
 
 
 class HealthStateTests(unittest.TestCase):
