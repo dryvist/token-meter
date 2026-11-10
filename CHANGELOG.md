@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/dryvist/token-meter/compare/v1.0.2...v1.1.0) (2026-11-10)
+
+
+### Features
+
+* add a quota --json command ([76f5395](https://github.com/dryvist/token-meter/commit/76f5395fcff947342dbdaab2aef4637ceb08890d))
+* add a quota --json command ([#9](https://github.com/dryvist/token-meter/issues/9)) ([832fc26](https://github.com/dryvist/token-meter/commit/832fc266793ff7014b00af8c1241f1a7a3b17c09))
+
 ## [1.0.2](https://github.com/dryvist/token-meter/compare/v1.0.1...v1.0.2) (2026-10-17)
 
 
