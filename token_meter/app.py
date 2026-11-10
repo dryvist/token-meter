@@ -37,6 +37,7 @@ import sqlite3
 import stat
 import subprocess
 import statistics
+import sys
 import time
 import threading
 from collections import defaultdict
@@ -329,6 +330,7 @@ QUOTA_REFRESH_S = 60.0
 QUOTA_STALE_S = 10 * 60.0
 QUOTA_HTTP_TIMEOUT_S = 8.0
 QUOTA_PROCESS_TIMEOUT_S = 8.0
+QUOTA_CLI_TIMEOUT_S = 9.0
 LOW_YIELD_RATIO = 0.005
 LOW_YIELD_COST = 0.05
 LOW_YIELD_CONTEXT_PCT = 0.25
@@ -8830,6 +8832,30 @@ def provider_quota_snapshots(now=None, loaders=None, start_refresh=True):
     return out
 
 
+def quota_cli(argv, now=None, loaders=None, timeout=QUOTA_CLI_TIMEOUT_S):
+    """Print provider quota rows as JSON after one bounded synchronous refresh."""
+    if list(argv) != ["--json"]:
+        print("usage: meter.py quota --json", file=sys.stderr)
+        return 2
+    now = float(now if now is not None else time.time())
+    loaders = loaders if loaders is not None else quota_registry().public_loaders()
+    workers = [
+        threading.Thread(
+            target=refresh_provider_quota, args=(provider, loader, now),
+            name=f"token-meter-quota-cli-{provider}", daemon=True,
+        )
+        for provider, loader in loaders.items()
+    ]
+    for worker in workers:
+        worker.start()
+    deadline = time.monotonic() + timeout
+    for worker in workers:
+        worker.join(max(0.0, deadline - time.monotonic()))
+    rows = provider_quota_snapshots(now=now, loaders=loaders, start_refresh=False)
+    print(json.dumps({"provider_quotas": rows}, separators=(",", ":")))
+    return 0
+
+
 def reset_provider_quota_cache():
     with _quota_lock:
         _quota_cache.clear()
@@ -9795,8 +9821,11 @@ def application():
     return _APPLICATION
 
 
-def main():
-    """Run the local HTTP application and its background services."""
+def main(argv=None):
+    """Run the local HTTP application, or the `quota --json` command."""
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["quota"]:
+        sys.exit(quota_cli(argv[1:]))
     print("Auto-following newest {} sessions. Ctrl-C to stop.".format(
         supported_runtime_phrase()
     ))

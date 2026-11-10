@@ -40,20 +40,20 @@ executable and import-compatibility facade; current composition lives in
 
 | Area | Owner | Responsibility |
 | --- | --- | --- |
-| Runtime identity and discovery | `token_meter/runtimes/` | Find sources, compute revisions, read inputs safely, parse runtime formats, and return normalized evidence. |
-| Shared evidence contracts | `token_meter/contracts.py`, `token_meter/compat.py` | Keep runtime, model provider, account provider, source locator, availability, and provenance distinct; preserve bounded compatibility shapes. |
-| Usage and analytics | `token_meter/domain/` | Calculate costs, timing, throughput, tools, insights, daily/model/session aggregates, and evidence coverage without runtime dispatch. |
+| Runtime identity and discovery | `token_meter/runtimes/` | Find sources, compute revisions, read inputs safely, parse formats, return normalized evidence. |
+| Shared evidence contracts | `token_meter/contracts.py`, `token_meter/compat.py` | Keep evidence identities distinct and compatibility shapes bounded. |
+| Usage and analytics | `token_meter/domain/` | Calculate costs, timing, throughput, tools, insights, aggregates, and coverage without runtime dispatch. |
 | Model identity and prices | `token_meter/models/` | Resolve provider-scoped model names and effective-dated prices. |
 | Provider limits | `token_meter/quotas/` | Make bounded, read-only account-usage requests and normalize available quota windows. |
 | Operating-system behavior | `token_meter/platforms/` | Own host paths, process policy, updates, service integration, and recoverable trash behavior. |
 | Application lifecycle | `token_meter/app.py`, `token_meter/services/` | Compose registries, manage caches/settings/watchers, and serve application jobs. |
 | Public projections | `token_meter/projections.py` | Allowlist fields for session, state, model, menu-bar, and MCP consumers. |
-| MCP query layer | `token_meter/mcp/` | Validate filters, bind opaque cursors to query revisions, positively allowlist standardized and native-structure fields, aggregate metrics, and publish schema metadata. |
+| MCP query layer | `token_meter/mcp/` | Validate filters, bind cursors to query revisions, allowlist trace fields, aggregate metrics, publish schema. |
 | HTTP transport | `token_meter/web/`, `page.html` | Serve the loopback API, routes, actions, and the single-file dashboard. |
 | Native clients | `menubar/`, Windows scripts | Render the compact `/menubar` payload and delegate deep review to the browser. |
 | Local MCP | `token_meter_mcp.py` | Return bounded read-only current-run or aggregate evidence over stdio. |
-| Packaging | `runtime-manifest.txt`, `token_meter/packaging.py`, `scripts/` | Stage one manifest-owned runtime and install platform-native lifecycle components. |
-| Telemetry mapping | `token_meter/telemetry/` | Produce a pure OpenTelemetry-shaped mapping from an immutable privacy projection; perform no export or I/O. |
+| Packaging | `runtime-manifest.txt`, `token_meter/packaging.py`, `scripts/` | Stage one manifest-owned runtime and install platform lifecycle components. |
+| Telemetry mapping | `token_meter/telemetry/` | Map an immutable privacy projection to an OpenTelemetry shape; perform no export or I/O. |
 
 ## Identity Axes
 
@@ -212,6 +212,12 @@ an explicit allowlist of numeric, enum, model, and tool fields. Data returned to
 a connected coding agent may enter that agent provider's model context under
 the client's own terms.
 
+`meter.py quota --json` serves scripts and agent hooks that need provider quota
+without the server. It refreshes each quota adapter once in parallel, waits at
+most `QUOTA_CLI_TIMEOUT_S`, and prints `{"provider_quotas": [...]}` from
+`provider_quota_snapshots()`. A provider that misses the deadline appears as a
+`loading` row with no windows.
+
 ## Privacy and Security Invariants
 
 No public HTTP, native, MCP, or telemetry projection may contain:
@@ -305,7 +311,9 @@ Detailed contributor recipes and commands are in
 3. Integration tests preserve compatibility and application composition.
 4. Embedded JavaScript, Python, shell, PowerShell, and Swift syntax/compile
    checks protect each delivery surface.
-5. Visible dashboard changes require wide-desktop and 1024-pixel-laptop browser checks. Phone, tablet, and sub-1024-pixel layouts are outside the supported product target.
+5. Visible dashboard changes require wide-desktop and 1024-pixel-laptop browser
+   checks. Phone, tablet, and sub-1024-pixel layouts are outside the supported
+   product target.
 6. Runtime changes require installation, `/health`, `/menubar`, platform service
    state, loopback listener ownership, installed revision, and manifest parity.
 
